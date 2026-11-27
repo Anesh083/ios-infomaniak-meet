@@ -1,0 +1,11 @@
+2026-11-27 09:19:08.149+0000 IDB Companion Built at Nov 1 2026 15:33:23
+2026-11-27 09:19:08.158+0000 IDB Companion architecture arm64
+2026-11-27 09:19:08.158+0000 Invoked with args=[/opt/homebrew/bin/idb_companion, --udid, 16AFAE62-8F15-4D89-8041-9A6510AE4913]
+2026-11-27 09:19:08.178+0000 Providing targets across Simulator and Device sets.
+2026-11-27 09:19:08.178+0000 CoreSimulator: Already loaded, skipping
+2026-11-27 09:19:08.178+0000 CoreSimulator: SimDevice has correct path of /Library/Developer
+2026-11-27 09:19:08.178+0000 Loaded All Private Frameworks [CoreSimulator]
+2026-11-27 09:19:10.504+0000 Starting swift server on tcp port 10882
+2026-11-27 09:19:10.508+0000 Swift server started on [ipv6]:::10882
+{"grpc_swift_port":10882,"grpc_port":10882}
+2026-11-27 09:19:10.509+0000 Companion will stay alive if target goes offline

