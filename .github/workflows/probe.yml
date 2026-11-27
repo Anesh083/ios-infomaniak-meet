@@ -1,10 +1,9 @@
 name: kmeet-deeplink-probe
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   probe:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
