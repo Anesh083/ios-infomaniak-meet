@@ -1,7 +1,0 @@
-name: probe3
-on: workflow_dispatch
-jobs:
-  smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "runner ok"; uname -a
