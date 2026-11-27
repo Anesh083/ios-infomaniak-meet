@@ -1,0 +1,9 @@
+name: probe2
+on: workflow_dispatch
+jobs:
+  smoke:
+    runs-on: macos-14
+    steps:
+      - run: |
+          xcodebuild -version
+          xcrun simctl list devices available | grep -i iphone | head -5
